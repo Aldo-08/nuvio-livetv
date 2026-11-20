@@ -468,7 +468,8 @@ def main():
                 st["k"] = 1 if ok else 0
                 if q:
                     st["q"] = q
-        lst.sort(key=lambda st: (-st.get("k", 0), -PRIO.get(st.get("o"), 0), -QUALITY.get(st.get("q", ""), 2.5 if st.get("q") == "HD" else 0)))
+        # working first, then the sharpest picture, then the most dependable source
+        lst.sort(key=lambda st: (-st.get("k", 0), -QUALITY.get(st.get("q", ""), 3.5 if st.get("q") == "HD" else 0), -PRIO.get(st.get("o"), 0)))
     json.dump({k: {"name": v, "streams": source_counts.get(k, 0)} for k, v in SOURCES.items()},
               open(f"{OUT}/sources.json", "w"), ensure_ascii=False)
 
