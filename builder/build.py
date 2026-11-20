@@ -13,6 +13,7 @@ Output (written to ./out, published to the `data` branch):
   c/<cc>.json                    channels of one country (compact)
   now/<cc>.json                  programmes from 2 h ago to 14 h ahead, per channel
   g/<cc>/<channel-id>.json       full schedule of one channel (1 day back, 3 ahead)
+  x/<cc>.xml.gz                  XMLTV guide using our channel ids (for TiviMate & co.)
   report.json                    per-country match statistics
 """
 import concurrent.futures as cf
@@ -98,6 +99,14 @@ def name_keys(names):
             if len(k) >= 2 and k not in keys:
                 keys.append(k)
     return keys
+
+
+def esc(v):
+    return (str(v).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;"))
+
+
+def xt(ts):
+    return datetime.fromtimestamp(ts, timezone.utc).strftime("%Y%m%d%H%M%S +0000")
 
 
 # ---------------------------------------------------------------- guide parsing
@@ -276,6 +285,7 @@ def main():
         index, g_progs, g_count = load(urls)
         lc = cc.lower()
         out, now, matched = [], {}, 0
+        xml_ch, xml_pr = [], []
         os.makedirs(f"{OUT}/g/{lc}", exist_ok=True)
         for c in sorted(chans, key=lambda c: c["name"].lower()):
             item = {
@@ -316,7 +326,24 @@ def main():
                           for p in progs if p["e"] >= NOW_FROM.timestamp() and p["s"] <= NOW_TO.timestamp()]
                 if window:
                     now[c["id"]] = window
+                xml_ch.append(f'<channel id="{esc(c["id"])}"><display-name>{esc(c["name"])}</display-name>'
+                              + (f'<icon src="{esc(item["l"])}"/>' if item.get("l") else "") + "</channel>")
+                for p in progs:
+                    xml_pr.append(
+                        f'<programme start="{xt(p["s"])}" stop="{xt(p["e"])}" channel="{esc(c["id"])}">'
+                        f'<title>{esc(p["t"])}</title>'
+                        + (f'<sub-title>{esc(p["st"])}</sub-title>' if p.get("st") else "")
+                        + (f'<desc>{esc(p["d"])}</desc>' if p.get("d") else "")
+                        + "".join(f"<category>{esc(x)}</category>" for x in p.get("c", []))
+                        + (f'<icon src="{esc(p["i"])}"/>' if p.get("i") else "")
+                        + "</programme>")
             out.append(item)
+        os.makedirs(f"{OUT}/x", exist_ok=True)
+        with gzip.open(f"{OUT}/x/{lc}.xml.gz", "wt", encoding="utf-8") as fh:
+            fh.write('<?xml version="1.0" encoding="UTF-8"?>\n<tv generator-info-name="nuvio-livetv">')
+            fh.write("".join(xml_ch))
+            fh.write("".join(xml_pr))
+            fh.write("</tv>")
         with open(f"{OUT}/c/{lc}.json", "w") as fh:
             json.dump(out, fh, separators=(",", ":"), ensure_ascii=False)
         with open(f"{OUT}/now/{lc}.json", "w") as fh:

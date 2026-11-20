@@ -32,7 +32,8 @@ const DEFAULTS = {
   catRows: [],         // extra "On now" rows per category, e.g. ["news","sports"]
   clean: true,         // tidy channel names
   days: 3,             // schedule days ahead
-  maxStreams: 3,       // links per channel
+  maxStreams: 3,        // links per channel
+  guideApp: false,      // add an "Open TV Guide" link that opens Horizon Home's guide
 };
 
 // ------------------------------------------------------------------ helpers
@@ -58,7 +59,7 @@ function b64urlDecode(s) {
 function readConfig(seg) {
   try {
     const cfg = { ...DEFAULTS, ...JSON.parse(b64urlDecode(seg)) };
-    cfg.cc = [].concat(cfg.cc || []).map((c) => String(c).toLowerCase()).filter((c) => /^[a-z]{2}$/.test(c)).slice(0, 40);
+    cfg.cc = [].concat(cfg.cc || []).map((c) => String(c).toLowerCase()).filter((c) => /^[a-z]{2}$/.test(c)).slice(0, 20);
     if (!cfg.cc.length) cfg.cc = DEFAULTS.cc;
     cfg.days = Math.max(1, Math.min(4, Number(cfg.days) || 3));
     cfg.maxStreams = Math.max(1, Math.min(6, Number(cfg.maxStreams) || 3));
@@ -76,18 +77,9 @@ async function data(path, ttl) {
   const now = Date.now();
   if (hit && now - hit.at < ttl * 1000) return hit.value;
   const url = DATA + path;
-  const cache = caches.default;
-  let res = await cache.match(url);
-  if (!res) {
-    const r = await fetch(url, { cf: { cacheTtl: ttl, cacheEverything: true } });
-    if (!r.ok) {
-      if (hit) return hit.value; // keep serving the last good copy
-      return null;
-    }
-    res = new Response(r.body, r);
-    res.headers.set("cache-control", `public, max-age=${ttl}`);
-    await cache.put(url, res.clone());
-  }
+  // one subrequest per file; the fetch itself is cached at the edge
+  const res = await fetch(url, { cf: { cacheTtl: ttl, cacheEverything: true } }).catch(() => null);
+  if (!res || !res.ok) return hit ? hit.value : null; // keep serving the last good copy
   const value = await res.json();
   mem.set(path, { at: now, value });
   if (mem.size > 300) mem.delete(mem.keys().next().value);
@@ -188,7 +180,7 @@ async function manifest(cfg, cfgSeg, origin) {
     description: `Live channels from ${cfg.cc.map((c) => c.toUpperCase()).join(", ")} with a matched TV guide. Free public streams from iptv-org; listings from epg.pw.`,
     logo: `${origin}/logo.png`,
     types: ["tv"],
-    resources: ["catalog", { name: "meta", types: ["tv"], idPrefixes: [PREFIX + ":"] }, { name: "stream", types: ["tv"], idPrefixes: [PREFIX + ":"] }],
+    resources: ["catalog", { name: "meta", types: ["tv", "series"], idPrefixes: [PREFIX + ":"] }, { name: "stream", types: ["tv", "series"], idPrefixes: [PREFIX + ":"] }],
     idPrefixes: [PREFIX + ":"],
     catalogs,
     behaviorHints: { configurable: true, configurationRequired: false },
@@ -398,7 +390,7 @@ async function meta(cfg, idStr) {
 
 // ------------------------------------------------------------------ streams
 
-async function stream(cfg, idStr) {
+async function stream(cfg, idStr, cfgStr, origin) {
   const id = parseId(idStr);
   if (!id) return { streams: [] };
   const list = (await channelsOf(id.cc)) || [];
@@ -411,8 +403,15 @@ async function stream(cfg, idStr) {
     const [cur] = current(now?.p?.[ch.id], t);
     if (cur) note = `Now: ${cur.t}`;
   }
+  const extra = cfg.guideApp
+    ? [{
+        externalUrl: `horizon://guide?cc=${id.cc}&ch=${encodeURIComponent(ch.id)}&src=${encodeURIComponent(`${origin}/${cfgStr}`)}`,
+        name: "📺 TV GUIDE",
+        description: "Open the full TV guide on Horizon Home",
+      }]
+    : [];
   return {
-    streams: (ch.s || []).slice(0, cfg.maxStreams).map((s, i) => {
+    streams: [...(ch.s || []).slice(0, cfg.maxStreams).map((s, i) => {
       const headers = {};
       if (s.a) headers["User-Agent"] = s.a;
       if (s.r) headers["Referer"] = s.r;
@@ -424,8 +423,32 @@ async function stream(cfg, idStr) {
         description: [cleanName(cfg, ch.n), note, i ? `Backup link ${i}` : "Main link"].filter(Boolean).join("\n"),
         behaviorHints: hints,
       };
-    }),
+    }), ...extra],
   };
+}
+
+// ------------------------------------------------------------------ playlist for IPTV apps
+
+const RAW = "https://raw.githubusercontent.com/jyotiprakash101/nuvio-livetv/data/";
+
+async function playlist(cfg) {
+  const chans = await allChannels(cfg);
+  const cnt = (await countries()) || {};
+  const tvg = cfg.cc.map((cc) => `${RAW}x/${cc}.xml.gz`).join(",");
+  const lines = [`#EXTM3U url-tvg="${tvg}" x-tvg-url="${tvg}"`];
+  for (const ch of chans) {
+    const s = (ch.s || [])[0];
+    if (!s) continue;
+    const group = cfg.cc.length > 1 ? (cnt[ch.cc]?.name || ch.cc.toUpperCase()) : ((ch.c || [])[0] || "general");
+    const name = cleanName(cfg, ch.n).replace(/,/g, " ");
+    lines.push(`#EXTINF:-1 tvg-id="${ch.id}" tvg-name="${name}"${ch.l ? ` tvg-logo="${ch.l}"` : ""} group-title="${group}",${name}`);
+    if (s.a) lines.push(`#EXTVLCOPT:http-user-agent=${s.a}`);
+    if (s.r) lines.push(`#EXTVLCOPT:http-referrer=${s.r}`);
+    lines.push(s.u);
+  }
+  return new Response(lines.join("\n") + "\n", {
+    headers: { "content-type": "audio/x-mpegurl; charset=utf-8", "access-control-allow-origin": "*", "cache-control": "public, max-age=900" },
+  });
 }
 
 // ------------------------------------------------------------------ router
@@ -453,10 +476,14 @@ export default {
 
       const [resource, type, id, extraSeg] = rest;
       const strip = (s) => decodeURIComponent((s || "").replace(/\.json$/, ""));
-      if (type !== "tv") return json({ metas: [], streams: [] }, 3600);
+      if (rest[0] === "playlist.m3u" || rest[0] === "playlist.m3u8") return playlist(cfg);
+      if (rest[0] === "epg.xml.gz" && cfg.cc.length) return Response.redirect(`${RAW}x/${cfg.cc[0]}.xml.gz`, 302);
+      if (rest[0] === "channels.json") return json(await allChannels(cfg), 600);
+      if (rest[0] === "now.json") return json(Object.fromEntries(await nowMap(cfg)), 300);
+      if (type !== "tv" && type !== "series") return json({ metas: [], streams: [] }, 3600);
       if (resource === "catalog") return json(await catalog(cfg, strip(id), parseExtra(strip(extraSeg))), 300);
       if (resource === "meta") return json(await meta(cfg, strip(id)), 600);
-      if (resource === "stream") return json(await stream(cfg, strip(id)), 600);
+      if (resource === "stream") return json(await stream(cfg, strip(id), parts[0], origin), 600);
       return json({ error: "not found" }, 60);
     } catch (e) {
       return json({ error: String(e && e.message || e) }, 10);

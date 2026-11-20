@@ -71,7 +71,7 @@ export function configurePage(origin, cfg, defaults) {
 
   <div class="card">
     <h2>Countries</h2>
-    <p class="h">Pick one or more. Numbers show channels and how many have a guide.</p>
+    <p class="h">Pick up to 20. Numbers show channels and how many have a guide.</p>
     <input type="text" class="search" id="cSearch" placeholder="Search countries…">
     <div class="grid" id="countries"></div>
   </div>
@@ -113,6 +113,7 @@ export function configurePage(origin, cfg, defaults) {
     <div class="toggles" style="margin-top:10px">
       <label><input type="checkbox" id="guide"><span>Only channels with a TV guide<small>Hides channels without listings.</small></span></label>
       <label><input type="checkbox" id="clean"><span>Tidy channel names<small>Removes tags like (1080p) and [Geo-blocked].</small></span></label>
+      <label><input type="checkbox" id="guideApp"><span>Add "Open TV Guide" link<small>Opens the full grid guide in Horizon Home (Android TV launcher). Leave off on other devices.</small></span></label>
       <label><input type="checkbox" id="nsfw"><span>Include adult channels<small>Off by default.</small></span></label>
     </div>
   </div>
@@ -125,6 +126,9 @@ export function configurePage(origin, cfg, defaults) {
       <button id="copy">Copy addon link</button>
       <a class="btn ghost" id="stremio" href="#">Open in Stremio / Nuvio</a>
     </div>
+    <p class="h" style="margin-top:18px">For TiviMate, OTT Navigator, Televizo or any IPTV app — the same channels with the guide filled in:</p>
+    <code class="url" id="m3u"></code>
+    <div class="actions"><button class="ghost" id="copyM3u">Copy playlist link</button></div>
     <div class="qr"><img id="qr" alt="QR code of the addon link"><span class="muted">Scan with your phone to copy the link onto it.</span></div>
   </div>
   <p class="muted">Channels: public streams listed by <a style="color:var(--dim)" href="https://github.com/iptv-org/iptv">iptv-org</a>. Guide: <a style="color:var(--dim)" href="https://epg.pw">epg.pw</a>. This addon hosts no video. Source: <a style="color:var(--dim)" href="https://github.com/jyotiprakash101/nuvio-livetv">GitHub</a>.</p>
@@ -160,7 +164,7 @@ function drawCountries(){
     const on = cfg.cc.includes(cc);
     l.className = "opt" + (on ? " on" : "");
     l.innerHTML = '<input type="checkbox"'+(on?" checked":"")+'> '+c.flag+' '+c.name+'<span class="n">'+c.channels+' · '+c.guide+' guide</span>';
-    l.querySelector("input").onchange = (e) => { if (e.target.checked) cfg.cc.push(cc); else cfg.cc = cfg.cc.filter(x=>x!==cc); l.classList.toggle("on", e.target.checked); update(); };
+    l.querySelector("input").onchange = (e) => { if (e.target.checked && cfg.cc.length >= 20) { e.target.checked = false; alert("Up to 20 countries"); return; } if (e.target.checked) cfg.cc.push(cc); else cfg.cc = cfg.cc.filter(x=>x!==cc); l.classList.toggle("on", e.target.checked); update(); };
     el.appendChild(l);
   }
 }
@@ -168,7 +172,7 @@ function drawCountries(){
 function update(){
   for (const k of ["name","tz","shape","art"]) cfg[k] = $(k).value;
   cfg.days = +$("days").value; cfg.maxStreams = +$("maxStreams").value;
-  for (const k of ["guide","clean","nsfw"]) cfg[k] = $(k).checked;
+  for (const k of ["guide","clean","nsfw","guideApp"]) cfg[k] = $(k).checked;
   let ch = 0, g = 0;
   for (const cc of cfg.cc){ if (C[cc]) { ch += C[cc].channels; g += C[cc].guide; } }
   $("sCh").textContent = ch.toLocaleString(); $("sG").textContent = g.toLocaleString();
@@ -176,6 +180,7 @@ function update(){
   $("sC").textContent = cfg.cc.length;
   const url = ORIGIN + "/" + b64url(JSON.stringify(cfg)) + "/manifest.json";
   $("url").textContent = url;
+  $("m3u").textContent = url.replace(/manifest\.json$/, "playlist.m3u");
   $("stremio").href = url.replace(/^https?:/, "stremio:");
   $("qr").src = "https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=" + encodeURIComponent(url);
 }
@@ -200,15 +205,16 @@ function guessCountry(){
 async function init(){
   for (const k of ["name","shape","art"]) $(k).value = cfg[k];
   $("days").value = cfg.days; $("maxStreams").value = cfg.maxStreams;
-  for (const k of ["guide","clean","nsfw"]) $(k).checked = !!cfg[k];
+  for (const k of ["guide","clean","nsfw","guideApp"]) $(k).checked = !!cfg[k];
   const zones = (Intl.supportedValuesOf ? Intl.supportedValuesOf("timeZone") : [cfg.tz]);
   const mine = Intl.DateTimeFormat().resolvedOptions().timeZone;
   if (!${JSON.stringify(!!cfg)} && mine) cfg.tz = mine;
   $("tz").innerHTML = zones.map(z=>'<option'+(z===cfg.tz?" selected":"")+'>'+z+'</option>').join("");
-  for (const id of ["name","tz","shape","art","days","maxStreams","guide","clean","nsfw"]) $(id).onchange = update;
+  for (const id of ["name","tz","shape","art","days","maxStreams","guide","clean","nsfw","guideApp"]) $(id).onchange = update;
   $("name").oninput = update;
   $("cSearch").oninput = drawCountries;
   $("copy").onclick = async () => { await navigator.clipboard.writeText($("url").textContent); $("copy").textContent = "Copied ✓"; setTimeout(()=>$("copy").textContent="Copy addon link",1500); };
+  $("copyM3u").onclick = async () => { await navigator.clipboard.writeText($("m3u").textContent); $("copyM3u").textContent = "Copied ✓"; setTimeout(()=>$("copyM3u").textContent="Copy playlist link",1500); };
   chips($("rows"), Object.entries(ROWS), cfg.rows);
   chips($("langs"), Object.entries(LANGS), cfg.lang);
   presets();
