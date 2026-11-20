@@ -34,6 +34,13 @@ const DEFAULTS = {
   days: 3,             // schedule days ahead
   maxStreams: 3,        // links per channel
   guideApp: false,      // add an "Open TV Guide" link that opens Horizon Home's guide
+  working: false,       // only channels whose link passed the last test
+  src: [],              // only these stream sources (empty = all)
+};
+
+const SOURCE_NAMES = {
+  samsung: "Samsung TV Plus", pluto: "Pluto TV", roku: "Roku Channel", freetv: "Free-TV",
+  validated: "Validated list", online: "Health-checked list", iptv: "iptv-org",
 };
 
 // ------------------------------------------------------------------ helpers
@@ -115,12 +122,15 @@ async function allChannels(cfg) {
   const out = [];
   const cats = new Set(cfg.cat);
   const langs = new Set(cfg.lang);
+  const srcs = new Set(cfg.src || []);
   for (const [cc, list] of lists) {
     for (const ch of list) {
       if (ch.x && !cfg.nsfw) continue;
       if (cfg.guide && !ch.g) continue;
       if (cats.size && !(ch.c || []).some((c) => cats.has(c))) continue;
       if (langs.size && !(ch.la || []).some((l) => langs.has(l))) continue;
+      if (cfg.working && !ch.v) continue;
+      if (srcs.size && !(ch.o || ["iptv"]).some((o) => srcs.has(o))) continue;
       out.push({ ...ch, cc });
     }
   }
@@ -411,7 +421,7 @@ async function stream(cfg, idStr, cfgStr, origin) {
       }]
     : [];
   return {
-    streams: [...(ch.s || []).slice(0, cfg.maxStreams).map((s, i) => {
+    streams: [...(ch.s || []).filter((s) => !(cfg.src || []).length || cfg.src.includes(s.o || "iptv")).slice(0, cfg.maxStreams).map((s, i) => {
       const headers = {};
       if (s.a) headers["User-Agent"] = s.a;
       if (s.r) headers["Referer"] = s.r;
@@ -420,7 +430,9 @@ async function stream(cfg, idStr, cfgStr, origin) {
       return {
         url: s.u,
         name: `● LIVE${s.q ? `\n${s.q}` : ""}`,
-        description: [cleanName(cfg, ch.n), note, i ? `Backup link ${i}` : "Main link"].filter(Boolean).join("\n"),
+        description: [cleanName(cfg, ch.n), note,
+          `${SOURCE_NAMES[s.o] || "iptv-org"} · ${s.k ? "✓ tested working" : s.k === 0 ? "failed last test" : "not tested"}`,
+          i ? `Backup link ${i}` : "Main link"].filter(Boolean).join("\n"),
         behaviorHints: hints,
       };
     }), ...extra],

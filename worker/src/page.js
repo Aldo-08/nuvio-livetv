@@ -89,6 +89,12 @@ export function configurePage(origin, cfg, defaults) {
   </div>
 
   <div class="card">
+    <h2>Sources</h2>
+    <p class="h">Where the links come from. Leave all off to use every source.</p>
+    <div class="chips" id="srcs"></div>
+  </div>
+
+  <div class="card">
     <h2>Rows in Nuvio</h2>
     <p class="h">Each becomes a row you can place on Nuvio's home screen.</p>
     <div class="chips" id="rows"></div>
@@ -113,6 +119,7 @@ export function configurePage(origin, cfg, defaults) {
     <div class="toggles" style="margin-top:10px">
       <label><input type="checkbox" id="guide"><span>Only channels with a TV guide<small>Hides channels without listings.</small></span></label>
       <label><input type="checkbox" id="clean"><span>Tidy channel names<small>Removes tags like (1080p) and [Geo-blocked].</small></span></label>
+      <label><input type="checkbox" id="working"><span>Only channels that work<small>Hides channels whose links failed the last test (tests run from the US, so some India-only channels may be hidden).</small></span></label>
       <label><input type="checkbox" id="guideApp"><span>Add "Open TV Guide" link<small>Opens the full grid guide in Horizon Home (Android TV launcher). Leave off on other devices.</small></span></label>
       <label><input type="checkbox" id="nsfw"><span>Include adult channels<small>Off by default.</small></span></label>
     </div>
@@ -172,7 +179,7 @@ function drawCountries(){
 function update(){
   for (const k of ["name","tz","shape","art"]) cfg[k] = $(k).value;
   cfg.days = +$("days").value; cfg.maxStreams = +$("maxStreams").value;
-  for (const k of ["guide","clean","nsfw","guideApp"]) cfg[k] = $(k).checked;
+  for (const k of ["guide","clean","nsfw","guideApp","working"]) cfg[k] = $(k).checked;
   let ch = 0, g = 0;
   for (const cc of cfg.cc){ if (C[cc]) { ch += C[cc].channels; g += C[cc].guide; } }
   $("sCh").textContent = ch.toLocaleString(); $("sG").textContent = g.toLocaleString();
@@ -205,18 +212,20 @@ function guessCountry(){
 async function init(){
   for (const k of ["name","shape","art"]) $(k).value = cfg[k];
   $("days").value = cfg.days; $("maxStreams").value = cfg.maxStreams;
-  for (const k of ["guide","clean","nsfw","guideApp"]) $(k).checked = !!cfg[k];
+  for (const k of ["guide","clean","nsfw","guideApp","working"]) $(k).checked = !!cfg[k];
   const zones = (Intl.supportedValuesOf ? Intl.supportedValuesOf("timeZone") : [cfg.tz]);
   const mine = Intl.DateTimeFormat().resolvedOptions().timeZone;
   if (!${JSON.stringify(!!cfg)} && mine) cfg.tz = mine;
   $("tz").innerHTML = zones.map(z=>'<option'+(z===cfg.tz?" selected":"")+'>'+z+'</option>').join("");
-  for (const id of ["name","tz","shape","art","days","maxStreams","guide","clean","nsfw","guideApp"]) $(id).onchange = update;
+  for (const id of ["name","tz","shape","art","days","maxStreams","guide","clean","nsfw","guideApp","working"]) $(id).onchange = update;
   $("name").oninput = update;
   $("cSearch").oninput = drawCountries;
   $("copy").onclick = async () => { await navigator.clipboard.writeText($("url").textContent); $("copy").textContent = "Copied ✓"; setTimeout(()=>$("copy").textContent="Copy addon link",1500); };
   $("copyM3u").onclick = async () => { await navigator.clipboard.writeText($("m3u").textContent); $("copyM3u").textContent = "Copied ✓"; setTimeout(()=>$("copyM3u").textContent="Copy playlist link",1500); };
   chips($("rows"), Object.entries(ROWS), cfg.rows);
   chips($("langs"), Object.entries(LANGS), cfg.lang);
+  cfg.src = cfg.src || [];
+  chips($("srcs"), Object.entries({samsung:"Samsung TV Plus",pluto:"Pluto TV",roku:"Roku Channel",freetv:"Free-TV",validated:"Validated list",online:"Health-checked list",iptv:"iptv-org"}), cfg.src);
   presets();
   const [c, cats, rep] = await Promise.all([fetch("/api/countries").then(r=>r.json()), fetch("/api/categories").then(r=>r.json()), fetch("/api/report").then(r=>r.json()).catch(()=>({}))]);
   C = c; CATS = cats;
