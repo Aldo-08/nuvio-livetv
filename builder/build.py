@@ -4,6 +4,9 @@ Builds the data the Nuvio Live TV addon serves.
 
 For every country:
   * public channels and streams from iptv-org (https://github.com/iptv-org/api)
+  * extra public playlists (a validated list, Free-TV, a health-checked list), merged by channel
+  * free streaming-service channels (Samsung TV Plus, Pluto TV, Roku) with their own guides
+  * every stream is test-played once per build; working streams come first
   * free daily XMLTV guides from epg.pw and epgshare01, matched to channels by name
     (the two sources label channels differently, so ids alone never line up)
 
@@ -14,6 +17,7 @@ Output (written to ./out, published to the `data` branch):
   now/<cc>.json                  programmes from 2 h ago to 14 h ahead, per channel
   g/<cc>/<channel-id>.json       full schedule of one channel (1 day back, 3 ahead)
   x/<cc>.xml.gz                  XMLTV guide using our channel ids (for TiviMate & co.)
+  sources.json                   the stream sources and their counts
   report.json                    per-country match statistics
 """
 import concurrent.futures as cf
@@ -37,6 +41,97 @@ SHARE = "https://epgshare01.online/epgshare01/"
 SHARE_SKIP = {"ALL_SOURCES1", "DUMMY_CHANNELS"}
 # iptv-org country code -> code the guide sites use
 ALIAS = {"UK": "GB"}
+
+# ---------------------------------------------------------------- stream sources
+SOURCES = {
+    "samsung": "Samsung TV Plus",
+    "pluto": "Pluto TV",
+    "roku": "Roku Channel",
+    "freetv": "Free-TV",
+    "validated": "Validated list",
+    "online": "Health-checked list",
+    "iptv": "iptv-org",
+}
+PRIO = {"samsung": 6, "pluto": 6, "roku": 6, "freetv": 5, "validated": 4, "online": 4, "iptv": 1}
+M3U_SOURCES = [
+    ("validated", "https://raw.githubusercontent.com/AdeelWajid/iptv_validated_list/main/playlist.m3u"),
+    ("freetv", "https://raw.githubusercontent.com/Free-TV/IPTV/master/playlist.m3u8"),
+    ("online", "https://dearbulut.github.io/iptv/playlists/online.m3u"),
+]
+MJH = "https://raw.githubusercontent.com/matthuisman/i.mjh.nz/master/"
+FAST = [
+    # key, folder, stream url pattern
+    ("samsung", "SamsungTVPlus", "https://jmp2.uk/stvp-{id}"),
+    ("pluto", "PlutoTV", "https://jmp2.uk/plu-{id}.m3u8"),
+    ("roku", "Roku", "https://jmp2.uk/rok-{id}.m3u8"),
+]
+FAST_GROUPS = {
+    "hindi news": ("news", "hin"), "english news": ("news", "eng"), "regional news": ("news", None),
+    "news": ("news", None), "news + opinion": ("news", None), "local news": ("news", None),
+    "movies": ("movies", None), "entertainment": ("entertainment", None), "music": ("music", None),
+    "lifestyle": ("lifestyle", None), "infotainment": ("documentary", None), "documentaries": ("documentary", None),
+    "sports": ("sports", None), "kids": ("kids", None), "kids & family": ("kids", None),
+    "devotional": ("religious", None), "comedy": ("comedy", None), "reality": ("entertainment", None),
+    "crime": ("entertainment", None), "drama": ("entertainment", None), "food": ("cooking", None),
+    "home": ("lifestyle", None), "travel": ("travel", None), "anime": ("animation", None),
+    "classic tv": ("classic", None), "sci-fi": ("entertainment", None), "game shows": ("entertainment", None),
+}
+LANG_WORDS = {"bhojpuri": "bho", "punjabi": "pan", "tamil": "tam", "telugu": "tel", "bangla": "ben", "bengali": "ben",
+              "marathi": "mar", "gujarati": "guj", "kannada": "kan", "malayalam": "mal", "odia": "ori", "urdu": "urd"}
+QUALITY = {"2160p": 6, "1440p": 5, "1080p": 4, "720p": 3, "576p": 2, "480p": 2, "360p": 1}
+
+
+def parse_m3u(text):
+    """[{attrs..., name, url, ua, ref}] from an M3U playlist."""
+    out, cur = [], None
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("#EXTINF"):
+            attrs = dict(re.findall(r'([\w-]+)="([^"]*)"', line))
+            cur = {"attrs": attrs, "name": line.rsplit(",", 1)[-1].strip() if "," in line else attrs.get("tvg-name", "")}
+        elif line.startswith("#EXTVLCOPT:http-user-agent=") and cur is not None:
+            cur["ua"] = line.split("=", 1)[1]
+        elif line.startswith("#EXTVLCOPT:http-referrer=") and cur is not None:
+            cur["ref"] = line.split("=", 1)[1]
+        elif line and not line.startswith("#") and cur is not None:
+            cur["url"] = line
+            out.append(cur)
+            cur = None
+    return out
+
+
+def name_quality(name):
+    m = re.search(r"\((\d{3,4}p)\)", name or "")
+    return m.group(1) if m else None
+
+
+def clean_name(name):
+    return re.sub(r"\s*(\([^)]*\)|\[[^\]]*\])", "", name or "").strip()
+
+
+def probe(st):
+    """Test-plays a stream briefly: (works, quality)."""
+    headers = {"User-Agent": st.get("a") or "Mozilla/5.0 (Linux; Android 11) AppleWebKit/537.36 Chrome/120 Safari/537.36"}
+    if st.get("r"):
+        headers["Referer"] = st["r"]
+    try:
+        req = urllib.request.Request(st["u"], headers=headers)
+        with urllib.request.urlopen(req, timeout=8) as r:
+            ctype = (r.headers.get("Content-Type") or "").lower()
+            data = r.read(65536)
+    except Exception:
+        return False, None
+    head = data[:4000].decode("utf-8", "ignore")
+    if head.lstrip().startswith("#EXTM3U"):
+        res = [int(h) for _w, h in re.findall(r"RESOLUTION=(\d+)x(\d+)", head)]
+        q = None
+        if res:
+            h = max(res)
+            q = "2160p" if h >= 2000 else "1080p" if h >= 1000 else "720p" if h >= 700 else "576p" if h >= 560 else "480p" if h >= 440 else "360p"
+        return ("#EXTINF" in head or "#EXT-X-STREAM-INF" in head or "#EXT-X-TARGETDURATION" in head), q
+    if data[:1] == b"\x47" or "video" in ctype or "mpegurl" in ctype or "octet-stream" in ctype:
+        return len(data) > 1000, None
+    return False, None
 OUT = os.environ.get("OUT", "out")
 UA = "nuvio-livetv-builder/1.0 (+https://github.com/jyotiprakash101/nuvio-livetv)"
 NOW = datetime.now(timezone.utc)
@@ -200,7 +295,6 @@ def main():
         if cur is None or score > cur[0]:
             logo[l["channel"]] = (score, l["url"])
 
-    QUALITY = {"2160p": 5, "1080p": 4, "720p": 3, "576p": 2, "480p": 2, "360p": 1}
     chan_streams = {}
     for s in streams:
         cid = s.get("channel")
@@ -215,9 +309,168 @@ def main():
             st["a"] = s["user_agent"]
         if s.get("feed"):
             st["f"] = s["feed"]
+        st["o"] = "iptv"
         chan_streams.setdefault(cid, []).append(st)
-    for v in chan_streams.values():
-        v.sort(key=lambda st: -QUALITY.get(st.get("q", ""), 0))
+
+    country_names = {c["code"]: c for c in countries}
+    by_cname = {c["name"].lower(): c["code"] for c in countries}
+    by_cname.update({"uk": "UK", "usa": "US", "united states": "US", "united kingdom": "UK"})
+    cat_ids = {c["id"] for c in categories}
+
+    # name index per country, to merge the same channel from different sources
+    idx = {}
+    for c in by_id.values():
+        for k in name_keys([c["name"]] + (c.get("alt_names") or [])):
+            idx.setdefault(c["country"], {}).setdefault(k, c["id"])
+
+    def add_stream(cid, st):
+        lst = chan_streams.setdefault(cid, [])
+        if any(x["u"] == st["u"] for x in lst):
+            for x in lst:  # same link listed by several sources: keep the best origin
+                if x["u"] == st["u"] and PRIO[st["o"]] > PRIO[x.get("o", "iptv")]:
+                    x["o"] = st["o"]
+            return
+        lst.append(st)
+
+    def new_channel(cid, name, cc, cats=None, logo_url=None, la=None):
+        if cid not in by_id:
+            by_id[cid] = {"id": cid, "name": name, "country": cc, "categories": cats or [], "alt_names": []}
+            if logo_url:
+                logo[cid] = (0, logo_url)
+            if la:
+                langs.setdefault(cid, set()).add(la)
+            for k in name_keys([name]):
+                idx.setdefault(cc, {}).setdefault(k, cid)
+        return cid
+
+    def slug(name):
+        return re.sub(r"[^A-Za-z0-9]+", "", unicodedata.normalize("NFKD", name).encode("ascii", "ignore").decode()) or "ch"
+
+    source_counts = {k: 0 for k in SOURCES}
+    source_counts["iptv"] = sum(len(v) for v in chan_streams.values())
+
+    # 1) extra public playlists
+    for key, url in M3U_SOURCES:
+        raw = get(url, timeout=120)
+        if not raw:
+            print(f"  ! source {key} unavailable")
+            continue
+        entries = parse_m3u(raw.decode("utf-8", "ignore"))
+        added = 0
+        for e in entries:
+            a = e["attrs"]
+            tid = (a.get("tvg-id") or "").split("@")[0].strip()
+            cid = tid if tid in by_id else None
+            name = clean_name(e["name"]) or clean_name(a.get("tvg-name"))
+            if not name or not e.get("url", "").startswith("http"):
+                continue
+            if cid:
+                cc = by_id[cid]["country"]
+            else:
+                cc = (a.get("tvg-country") or "").split(";")[0].strip().upper()[:2]
+                if not cc and re.search(r"\.[a-z]{2}$", tid):
+                    cc = tid[-2:].upper()
+                if not cc:
+                    cc = by_cname.get((a.get("group-title") or "").strip().lower())
+                cc = {"GB": "UK"}.get(cc, cc)
+                if not cc or cc not in country_names:
+                    continue
+                for k in name_keys([name]):
+                    if k in idx.get(cc, {}):
+                        cid = idx[cc][k]
+                        break
+                if not cid:
+                    group = [g.strip().lower() for g in (a.get("group-title") or "").split(";")]
+                    cid = new_channel(f"{slug(name)}.{cc.lower()}", name, cc, [g for g in group if g in cat_ids], a.get("tvg-logo"))
+            st = {"u": e["url"], "o": key}
+            q = name_quality(e["name"])
+            if q:
+                st["q"] = q
+            if e.get("ua"):
+                st["a"] = e["ua"]
+            if e.get("ref"):
+                st["r"] = e["ref"]
+            add_stream(cid, st)
+            added += 1
+        source_counts[key] = added
+        print(f"  source {key}: {added} streams")
+
+    # 2) free streaming services, with their own exact guides
+    fast_guide = {}   # channel id -> (folder, region, service channel id)
+    for key, folder, pattern in FAST:
+        raw = get(MJH + folder + "/.channels.json.gz", timeout=120)
+        if not raw:
+            print(f"  ! source {key} unavailable")
+            continue
+        d = json.loads(raw)
+        ua = (d.get("headers") or {}).get("user-agent")
+        regions = d.get("regions") or {"us": {"channels": d.get("channels", {})}}
+        if "channels" in d and isinstance(d.get("channels"), dict) and folder == "Roku":
+            regions = {"all": {"channels": d["channels"]}}
+        added = 0
+        for rcc, reg in regions.items():
+            cc = "US" if rcc == "all" else {"GB": "UK"}.get(rcc.upper(), rcc.upper())
+            if cc not in country_names:
+                continue
+            for fid, ch in (reg.get("channels") or {}).items():
+                name = (ch.get("name") or "").strip()
+                if not name:
+                    continue
+                groups = [ch.get("group")] if ch.get("group") else list(ch.get("groups") or [])
+                cat, la = None, None
+                for g in groups:
+                    m = FAST_GROUPS.get((g or "").strip().lower())
+                    if m:
+                        cat, la = m
+                        break
+                low = name.lower()
+                for w, code in LANG_WORDS.items():
+                    if w in low:
+                        la = code
+                cid = None
+                for k in name_keys([name]):
+                    if k in idx.get(cc, {}):
+                        cid = idx[cc][k]
+                        break
+                if not cid:
+                    cid = new_channel(f"{key}-{fid}", name, cc, [cat] if cat else [], ch.get("logo"), la)
+                elif la:
+                    langs.setdefault(cid, set()).add(la)
+                st = {"u": pattern.format(id=fid), "o": key, "q": "HD"}
+                if ua:
+                    st["a"] = ua
+                add_stream(cid, st)
+                fast_guide.setdefault(cid, (folder, "all" if rcc == "all" else rcc, fid))
+                added += 1
+        source_counts[key] = added
+        print(f"  source {key}: {added} channels")
+
+    # 3) test-play every link once (streaming-service links are trusted)
+    todo = {}
+    for lst in chan_streams.values():
+        for st in lst:
+            if st.get("o") in ("samsung", "pluto", "roku"):
+                st["k"] = 1
+            else:
+                todo.setdefault(st["u"], st)
+    print(f"Checking {len(todo)} links…")
+    t1 = time.time()
+    results = {}
+    with cf.ThreadPoolExecutor(160) as ex:
+        for u, (ok, q) in zip(todo, ex.map(probe, todo.values())):
+            results[u] = (ok, q)
+    working = sum(1 for ok, _ in results.values() if ok)
+    print(f"  {working} of {len(todo)} links work ({int(time.time() - t1)} s)")
+    for lst in chan_streams.values():
+        for st in lst:
+            if st["u"] in results:
+                ok, q = results[st["u"]]
+                st["k"] = 1 if ok else 0
+                if q:
+                    st["q"] = q
+        lst.sort(key=lambda st: (-st.get("k", 0), -PRIO.get(st.get("o"), 0), -QUALITY.get(st.get("q", ""), 2.5 if st.get("q") == "HD" else 0)))
+    json.dump({k: {"name": v, "streams": source_counts.get(k, 0)} for k, v in SOURCES.items()},
+              open(f"{OUT}/sources.json", "w"), ensure_ascii=False)
 
     per_country = {}
     for cid, sts in chan_streams.items():
@@ -226,7 +479,6 @@ def main():
 
     json.dump({c["id"]: c["name"] for c in categories}, open(f"{OUT}/categories.json", "w"))
 
-    country_names = {c["code"]: c for c in countries}
     codes = sorted(per_country)
     print(f"Countries with streams: {len(codes)}")
 
@@ -276,6 +528,24 @@ def main():
     g_index, g_all, _ = load([SHARE + f"epg_ripper_{f}.xml.gz" for f in share_global])
     print(f"  brand-wide guide channels: {len(g_index)} keys")
 
+    fast_xml = {}
+    need = sorted({(f, r) for f, r, _ in fast_guide.values()})
+    print(f"Loading {len(need)} streaming-service guides…")
+
+    def load_fast(fr):
+        folder, region = fr
+        raw = get(MJH + f"{folder}/{region}.xml.gz", timeout=300)
+        if not raw:
+            return fr, {}
+        try:
+            return fr, parse_guide(raw)[1]
+        except Exception as e:
+            print(f"  ! bad guide {folder}/{region}: {e}", file=sys.stderr)
+            return fr, {}
+    with cf.ThreadPoolExecutor(6) as ex:
+        for fr, progs in ex.map(load_fast, need):
+            fast_xml[fr] = progs
+
     def build_country(cc):
         chans = per_country[cc]
         gc = ALIAS.get(cc, cc)
@@ -293,6 +563,9 @@ def main():
                 "n": c["name"],
                 "s": chan_streams[c["id"]][:6],
             }
+            item["o"] = sorted({st.get("o", "iptv") for st in chan_streams[c["id"]]}, key=lambda o: -PRIO.get(o, 0))
+            if any(st.get("k") for st in chan_streams[c["id"]]):
+                item["v"] = 1
             if c["id"] in logo:
                 item["l"] = logo[c["id"]][1]
             if c.get("categories"):
@@ -304,8 +577,11 @@ def main():
             if c.get("website"):
                 item["w"] = c["website"]
             gid, progs = None, None
+            fg = fast_guide.get(c["id"])
+            if fg and fast_xml.get(fg[:2], {}).get(fg[2]):
+                gid, progs = fg[2], fast_xml[fg[:2]][fg[2]]
             keys = name_keys([c["name"]] + (c.get("alt_names") or []))
-            for k in keys:
+            for k in ([] if gid else keys):
                 if k in index:
                     gid = index[k][0]
                     progs = g_progs[gid]
@@ -350,6 +626,7 @@ def main():
             json.dump({"at": int(NOW.timestamp()), "p": now}, fh, separators=(",", ":"), ensure_ascii=False)
         info = country_names.get(cc, {})
         return lc, {"name": info.get("name", cc), "flag": info.get("flag", ""), "channels": len(out),
+                    "working": sum(1 for i in out if i.get("v")),
                     "guide": matched, "guideChannels": g_count, "sources": len(urls)}
 
     os.makedirs(f"{OUT}/c", exist_ok=True)
