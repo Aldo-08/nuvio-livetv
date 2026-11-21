@@ -377,10 +377,7 @@ def main():
                 cc = {"GB": "UK"}.get(cc, cc)
                 if not cc or cc not in country_names:
                     continue
-                for k in name_keys([name]):
-                    if k in idx.get(cc, {}):
-                        cid = idx[cc][k]
-                        break
+                # Do not merge by name: always create a new channel for M3U entries
                 if not cid:
                     group = [g.strip().lower() for g in (a.get("group-title") or "").split(";")]
                     cid = new_channel(f"{slug(name)}.{cc.lower()}", name, cc, [g for g in group if g in cat_ids], a.get("tvg-logo"))
@@ -430,10 +427,7 @@ def main():
                     if w in low:
                         la = code
                 cid = None
-                for k in name_keys([name]):
-                    if k in idx.get(cc, {}):
-                        cid = idx[cc][k]
-                        break
+                # Do not merge by name: always create a new channel for M3U entries
                 if not cid:
                     cid = new_channel(f"{key}-{fid}", name, cc, [cat] if cat else [], ch.get("logo"), la)
                 elif la:
