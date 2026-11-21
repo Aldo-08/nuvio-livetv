@@ -51,12 +51,14 @@ SOURCES = {
     "validated": "Validated list",
     "online": "Health-checked list",
     "iptv": "iptv-org",
+    "argentina": "Argentina (iptv-org M3U)",
 }
-PRIO = {"samsung": 6, "pluto": 6, "roku": 6, "freetv": 5, "validated": 4, "online": 4, "iptv": 1}
+PRIO = {"samsung": 6, "pluto": 6, "roku": 6, "freetv": 5, "validated": 4, "online": 4, "iptv": 1, "argentina": 2}
 M3U_SOURCES = [
     ("validated", "https://raw.githubusercontent.com/AdeelWajid/iptv_validated_list/main/playlist.m3u"),
     ("freetv", "https://raw.githubusercontent.com/Free-TV/IPTV/master/playlist.m3u8"),
     ("online", "https://dearbulut.github.io/iptv/playlists/online.m3u"),
+    ("argentina", "https://iptv-org.github.io/iptv/countries/ar.m3u"),
 ]
 MJH = "https://raw.githubusercontent.com/matthuisman/i.mjh.nz/master/"
 FAST = [
