@@ -376,6 +376,11 @@ def main():
                     cc = by_cname.get((a.get("group-title") or "").strip().lower())
                 cc = {"GB": "UK"}.get(cc, cc)
                 if not cc or cc not in country_names:
+                    if key == "argentina":
+                        cc = "AR"
+                    else:
+                        continue
+                if cc not in country_names:
                     continue
                 # Do not merge by name: always create a new channel for M3U entries
                 if not cid:
