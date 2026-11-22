@@ -52,13 +52,15 @@ SOURCES = {
     "online": "Health-checked list",
     "iptv": "iptv-org",
     "argentina": "Argentina (iptv-org M3U)",
+    "iptvorg": "iptv-org index",
 }
-PRIO = {"samsung": 6, "pluto": 6, "roku": 6, "freetv": 5, "validated": 4, "online": 4, "iptv": 1, "argentina": 2}
+PRIO = {"samsung": 6, "pluto": 6, "roku": 6, "freetv": 5, "validated": 4, "online": 4, "iptv": 1, "argentina": 2, "iptvorg": 1}
 M3U_SOURCES = [
     ("validated", "https://raw.githubusercontent.com/AdeelWajid/iptv_validated_list/main/playlist.m3u"),
     ("freetv", "https://raw.githubusercontent.com/Free-TV/IPTV/master/playlist.m3u8"),
     ("online", "https://dearbulut.github.io/iptv/playlists/online.m3u"),
     ("argentina", "https://iptv-org.github.io/iptv/countries/ar.m3u"),
+    ("iptvorg", "https://iptv-org.github.io/iptv/index.m3u"),
 ]
 MJH = "https://raw.githubusercontent.com/matthuisman/i.mjh.nz/master/"
 FAST = [
@@ -472,7 +474,7 @@ def main():
         # working first, then the sharpest picture, then the most dependable source
         lst.sort(key=lambda st: (-st.get("k", 0), -QUALITY.get(st.get("q", ""), 3.5 if st.get("q") == "HD" else 0), -PRIO.get(st.get("o"), 0)))
     json.dump({k: {"name": v, "streams": source_counts.get(k, 0)} for k, v in SOURCES.items()},
-              open(f"{OUT}/sources.json", "w"), ensure_ascii=False)
+              open(f"{OUT}/sources.json", "w", encoding="utf-8"), ensure_ascii=False)
 
     per_country = {}
     for cid, sts in chan_streams.items():
@@ -563,7 +565,7 @@ def main():
             item = {
                 "id": c["id"],
                 "n": c["name"],
-                "s": chan_streams[c["id"]][:6],
+                "s": chan_streams[c["id"]][:12],
             }
             item["o"] = sorted({st.get("o", "iptv") for st in chan_streams[c["id"]]}, key=lambda o: -PRIO.get(o, 0))
             if any(st.get("k") for st in chan_streams[c["id"]]):
@@ -597,7 +599,7 @@ def main():
             if gid:
                 item["g"] = 1
                 matched += 1
-                with open(f"{OUT}/g/{lc}/{c['id']}.json", "w") as fh:
+                with open(f"{OUT}/g/{lc}/{c['id']}.json", "w", encoding="utf-8") as fh:
                     json.dump(progs, fh, separators=(",", ":"), ensure_ascii=False)
                 window = [{"s": p["s"], "e": p["e"], "t": p["t"], **({"c": p["c"]} if "c" in p else {}),
                            **({"i": p["i"]} if "i" in p else {})}
@@ -622,9 +624,9 @@ def main():
             fh.write("".join(xml_ch))
             fh.write("".join(xml_pr))
             fh.write("</tv>")
-        with open(f"{OUT}/c/{lc}.json", "w") as fh:
+        with open(f"{OUT}/c/{lc}.json", "w", encoding="utf-8") as fh:
             json.dump(out, fh, separators=(",", ":"), ensure_ascii=False)
-        with open(f"{OUT}/now/{lc}.json", "w") as fh:
+        with open(f"{OUT}/now/{lc}.json", "w", encoding="utf-8") as fh:
             json.dump({"at": int(NOW.timestamp()), "p": now}, fh, separators=(",", ":"), ensure_ascii=False)
         info = country_names.get(cc, {})
         return lc, {"name": info.get("name", cc), "flag": info.get("flag", ""), "channels": len(out),
@@ -638,11 +640,11 @@ def main():
         for cc, info in ex.map(build_country, codes):
             report[cc] = info
             print(f"  {cc}: {info['channels']} channels, guide for {info['guide']}")
-    json.dump(report, open(f"{OUT}/countries.json", "w"), ensure_ascii=False, separators=(",", ":"))
+    json.dump(report, open(f"{OUT}/countries.json", "w", encoding="utf-8"), ensure_ascii=False, separators=(",", ":"))
     total = sum(r["channels"] for r in report.values())
     guided = sum(r["guide"] for r in report.values())
     json.dump({"built": int(NOW.timestamp()), "channels": total, "withGuide": guided,
-               "seconds": int(time.time() - t0)}, open(f"{OUT}/report.json", "w"))
+               "seconds": int(time.time() - t0)}, open(f"{OUT}/report.json", "w", encoding="utf-8"))
     print(f"Done: {total} channels, {guided} with guide, {int(time.time() - t0)} s")
 
 

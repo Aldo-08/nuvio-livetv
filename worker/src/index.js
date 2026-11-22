@@ -14,7 +14,7 @@
 
 import { configurePage } from "./page.js";
 
-const DATA = "https://raw.githubusercontent.com/jyotiprakash101/nuvio-livetv/data/";
+const DATA = "https://raw.githubusercontent.com/Aldo-08/nuvio-livetv/data/";
 const VERSION = "1.0.0";
 const PREFIX = "nltv";
 
@@ -441,7 +441,7 @@ async function stream(cfg, idStr, cfgStr, origin) {
 
 // ------------------------------------------------------------------ playlist for IPTV apps
 
-const RAW = "https://raw.githubusercontent.com/jyotiprakash101/nuvio-livetv/data/";
+const RAW = "https://raw.githubusercontent.com/Aldo-08/nuvio-livetv/data/";
 
 async function playlist(cfg) {
   const chans = await allChannels(cfg);
